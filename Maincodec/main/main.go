@@ -39,8 +39,10 @@ func main() {
 			ServiceMethod: "Foo.Sum",
 			Seq:           uint64(i),
 		}
+		//发送请求
 		_ = cc.Write(h, fmt.Sprintf("geerpc req %d", h.Seq))
 		_ = cc.ReadHeader(h)
+		//接收请求
 		var reply string
 		_ = cc.ReadBody(&reply)
 		log.Println("reply:", reply)

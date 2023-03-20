@@ -31,8 +31,10 @@ func NewServer() *Server {
 	return &Server{}
 }
 
+// 默认实例
 var DefaultServer = NewServer()
 
+// 接收请求
 func (server *Server) Accept(lis net.Listener) {
 	for {
 		conn, err := lis.Accept()
@@ -40,21 +42,26 @@ func (server *Server) Accept(lis net.Listener) {
 			log.Println("rpc server: accept error:", err)
 			return
 		}
+		//创建服务器连接
 		go server.ServeConn(conn)
 	}
 }
 
+// 接收请求
 func Accept(lis net.Listener) { DefaultServer.Accept(lis) }
 
 func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	defer func() { _ = conn.Close() }()
 	var opt Option
+	//反序列化，读取消息
 	if err := json.NewDecoder(conn).Decode(&opt); err != nil {
 		log.Println("rpc server: options error: ", err)
 	}
+	//检查MagicNumber是否对应
 	if opt.MagicNumber != MagicNumber {
 		log.Printf("rpc server: invalid magic number %x", opt.MagicNumber)
 	}
+	//检查编码器是否正确
 	f := codec.NewCodecFuncMap[opt.CodecType]
 	if f == nil {
 		log.Printf("rpc server: invalid codec type %s", opt.CodecType)
@@ -65,9 +72,10 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 var invalidRequest = struct{}{}
 
 func (server *Server) serveCodec(cc codec.Codec) {
-	sending := new(sync.Mutex) //锁
-	wg := new(sync.WaitGroup)
+	sending := new(sync.Mutex) //锁住线程资源
+	wg := new(sync.WaitGroup)  //等待所有请求被处理完毕
 	for {
+		//读取请求
 		req, err := server.readRequest(cc)
 		if err != nil {
 			if req == nil {
@@ -78,18 +86,22 @@ func (server *Server) serveCodec(cc codec.Codec) {
 			continue
 		}
 		wg.Add(1)
+		//并发执行处理请求
 		go server.handleRequest(cc, req, sending, wg)
 	}
+	//等待请求结束
 	wg.Wait()
+	//关闭请求
 	_ = cc.Close()
 }
 
 // request stores all information of a call
 type request struct {
-	h            *codec.Header // header of request
+	h            *codec.Header // 请求头
 	argv, replyv reflect.Value // argv and replyv of request
 }
 
+// 读取请求
 func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 	var h codec.Header
 	if err := cc.ReadHeader(&h); err != nil {
@@ -101,6 +113,7 @@ func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 	return &h, nil
 }
 
+// 处理请求
 func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 	h, err := server.readRequestHeader(cc)
 	if err != nil {
@@ -108,7 +121,7 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 	}
 	req := &request{h: h}
 	// TODO: now we don't know the type of request argv
-	// day 1, just suppose it's string
+	// day 1, 暂时设置为string
 	req.argv = reflect.New(reflect.TypeOf(""))
 	if err = cc.ReadBody(req.argv.Interface()); err != nil {
 		log.Println("rpc server: read argv err:", err)
@@ -116,6 +129,7 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 	return req, nil
 }
 
+// 回复请求
 func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interface{}, sending *sync.Mutex) {
 	sending.Lock()
 	defer sending.Unlock()
@@ -124,6 +138,7 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 	}
 }
 
+// 处理请求
 func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
 	// TODO, should call registered rpc methods to get the right replyv
 	// day 1, just print argv and send a hello message
