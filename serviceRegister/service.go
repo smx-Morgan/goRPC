@@ -1,4 +1,4 @@
-package service_register
+package serviceRegister
 
 import (
 	"go/ast"
@@ -11,17 +11,17 @@ import (
 //反射中，当需要区分一个大品种的类型时，就会用到种类（Kind）。例如需要统一判断类型中的指针时，使用种类（Kind）信息就较为方便。
 
 // 通过反射动态获取结构体方法
-type methodType struct {
+type MethodType struct {
 	method    reflect.Method //方法本身
 	ArgType   reflect.Type   //第一个参数类型
 	ReplyType reflect.Type   //第二个参数类型
 	numCalls  uint64         //统计方法的调用次数
 }
 
-func (m *methodType) NumCalls() uint64 {
+func (m *MethodType) NumCalls() uint64 {
 	return atomic.LoadUint64(&m.numCalls)
 }
-func (m *methodType) newArgv() reflect.Value {
+func (m *MethodType) NewArgv() reflect.Value {
 	var argv reflect.Value
 	//可以通过 reflect.Elem() 方法获取这个指针指向的元素类型，这个获取过程被称为取元素
 	if m.ArgType.Kind() == reflect.Ptr {
@@ -31,7 +31,7 @@ func (m *methodType) newArgv() reflect.Value {
 	}
 	return argv
 }
-func (m *methodType) newReplyv() reflect.Value {
+func (m *MethodType) NewReplyv() reflect.Value {
 	// reply must be a pointer type
 	replyv := reflect.New(m.ReplyType.Elem())
 	switch m.ReplyType.Elem().Kind() {
@@ -43,27 +43,27 @@ func (m *methodType) newReplyv() reflect.Value {
 	return replyv
 }
 
-type service struct {
-	name   string
+type Service struct {
+	Name   string
 	typ    reflect.Type
 	rcvr   reflect.Value
-	method map[string]*methodType
+	Method map[string]*MethodType
 }
 
 // 构建服务的结构实例
-func newService(rcvr interface{}) *service {
-	s := new(service)
+func NewService(rcvr interface{}) *Service {
+	s := new(Service)
 	s.rcvr = reflect.ValueOf(rcvr)
-	s.name = reflect.Indirect(s.rcvr).Type().Name()
+	s.Name = reflect.Indirect(s.rcvr).Type().Name()
 	s.typ = reflect.TypeOf(rcvr)
-	if !ast.IsExported(s.name) {
-		log.Fatalf("rpc server: %s is not a valid service name", s.name)
+	if !ast.IsExported(s.Name) {
+		log.Fatalf("rpc server: %s is not a valid service name", s.Name)
 	}
 	s.registerMethods()
 	return s
 }
-func (s *service) registerMethods() {
-	s.method = make(map[string]*methodType)
+func (s *Service) registerMethods() {
+	s.Method = make(map[string]*MethodType)
 	for i := 0; i < s.typ.NumMethod(); i++ {
 		method := s.typ.Method(i)
 		mType := method.Type
@@ -79,12 +79,12 @@ func (s *service) registerMethods() {
 		if !isExportedOrBuiltinType(argType) || !isExportedOrBuiltinType(replyType) {
 			continue
 		}
-		s.method[method.Name] = &methodType{
+		s.Method[method.Name] = &MethodType{
 			method:    method,
 			ArgType:   argType,
 			ReplyType: replyType,
 		}
-		log.Printf("rpc server: register %s.%s\n", s.name, method.Name)
+		log.Printf("rpc server: register %s.%s\n", s.Name, method.Name)
 
 	}
 }
@@ -93,7 +93,7 @@ func isExportedOrBuiltinType(t reflect.Type) bool {
 }
 
 // 通过反射值调用方法。
-func (s *service) call(m *methodType, argv, replyv reflect.Value) error {
+func (s *Service) Call(m *MethodType, argv, replyv reflect.Value) error {
 	//numCall +1
 	atomic.AddUint64(&m.numCalls, 1)
 	f := m.method.Func

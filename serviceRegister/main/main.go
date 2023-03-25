@@ -1,16 +1,28 @@
 package main
 
 import (
-	"fmt"
 	"goRPC"
-	"goRPC/Maincodec"
 	"log"
 	"net"
 	"sync"
 	"time"
 )
 
+type Foo int
+
+type Args struct{ Num1, Num2 int }
+
+func (f Foo) Sum(args Args, reply *int) error {
+	*reply = args.Num1 + args.Num2
+	return nil
+}
+
+// 注册 Foo 到 Server 中，并启动 RPC 服务
 func startServer(addr chan string) {
+	var foo Foo
+	if err := goRPC.Register(&foo); err != nil {
+		log.Fatal("register error:", err)
+	}
 	// pick a free port
 	l, err := net.Listen("tcp", ":0")
 	if err != nil {
@@ -18,31 +30,29 @@ func startServer(addr chan string) {
 	}
 	log.Println("start rpc server on", l.Addr())
 	addr <- l.Addr().String()
-	//服务端接收请求
-	Maincodec.Accept(l)
+	goRPC.Accept(l)
 }
 
 func main() {
 	log.SetFlags(0)
 	addr := make(chan string)
 	go startServer(addr)
-	//发送请求
 	client, _ := goRPC.Dial("tcp", <-addr)
 	defer func() { _ = client.Close() }()
 
 	time.Sleep(time.Second)
-	// send request & receive response
+	//发送请求和接收响应
 	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			args := fmt.Sprintf("geerpc req %d", i)
-			var reply string
+			args := &Args{Num1: i, Num2: i * i}
+			var reply int
 			if err := client.Call("Foo.Sum", args, &reply); err != nil {
 				log.Fatal("call Foo.Sum error:", err)
 			}
-			log.Println("reply:", reply)
+			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
 		}(i)
 	}
 	wg.Wait()

@@ -1,0 +1,201 @@
+package goRPC
+
+import (
+	"encoding/json"
+	"errors"
+	"goRPC/Maincodec/codec"
+	"goRPC/serviceRegister"
+	"io"
+	"log"
+	"net"
+	"reflect"
+	"strings"
+	"sync"
+)
+
+const MagicNumber = 0x3bef5c
+
+type Option struct {
+	MagicNumber int        //MagicNumber标记这是一个rcp请求
+	CodecType   codec.Type //客户端可以选择不同的编解码器对正文进行编码,这里只实现了god
+}
+
+var DefaultOption = &Option{
+	MagicNumber: MagicNumber,
+	CodecType:   codec.GobType,
+}
+
+// RPC Server
+type Server struct {
+	serviceMap sync.Map
+}
+
+// return new server
+func NewServer() *Server {
+	return &Server{}
+}
+
+// 默认实例
+var DefaultServer = NewServer()
+
+// 接收请求
+func (server *Server) Accept(lis net.Listener) {
+	for {
+		conn, err := lis.Accept()
+		if err != nil {
+			log.Println("rpc server: accept error:", err)
+			return
+		}
+		//创建服务器连接
+		go server.ServeConn(conn)
+	}
+}
+
+// 接收请求
+func Accept(lis net.Listener) { DefaultServer.Accept(lis) }
+
+func (server *Server) ServeConn(conn io.ReadWriteCloser) {
+	defer func() { _ = conn.Close() }()
+	var opt Option
+	//反序列化，读取消息
+	if err := json.NewDecoder(conn).Decode(&opt); err != nil {
+		log.Println("rpc server: options error: ", err)
+	}
+	//检查MagicNumber是否对应
+	if opt.MagicNumber != MagicNumber {
+		log.Printf("rpc server: invalid magic number %x", opt.MagicNumber)
+	}
+	//检查编码器是否正确
+	f := codec.NewCodecFuncMap[opt.CodecType]
+	if f == nil {
+		log.Printf("rpc server: invalid codec type %s", opt.CodecType)
+	}
+	server.serveCodec(f(conn))
+}
+
+var invalidRequest = struct{}{}
+
+func (server *Server) serveCodec(cc codec.Codec) {
+	sending := new(sync.Mutex) //锁住线程资源
+	wg := new(sync.WaitGroup)  //等待所有请求被处理完毕
+	for {
+		//读取请求
+		req, err := server.readRequest(cc)
+		if err != nil {
+			if req == nil {
+				break // it's not possible to recover, so close the connection
+			}
+			req.h.Error = err.Error()
+			server.sendResponse(cc, req.h, invalidRequest, sending)
+			continue
+		}
+		wg.Add(1)
+		//并发执行处理请求
+		go server.handleRequest(cc, req, sending, wg)
+	}
+	//等待请求结束
+	wg.Wait()
+	//关闭请求
+	_ = cc.Close()
+}
+
+// request stores all information of a call
+type request struct {
+	h            *codec.Header // 请求头
+	argv, replyv reflect.Value // argv and replyv of request
+	mtype        *serviceRegister.MethodType
+	svc          *serviceRegister.Service
+}
+
+// 读取请求
+func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
+	var h codec.Header
+	if err := cc.ReadHeader(&h); err != nil {
+		if err != io.EOF && err != io.ErrUnexpectedEOF {
+			log.Println("rpc server: read header error:", err)
+		}
+		return nil, err
+	}
+	return &h, nil
+}
+
+// 处理请求
+func (server *Server) readRequest(cc codec.Codec) (*request, error) {
+	h, err := server.readRequestHeader(cc)
+	if err != nil {
+		return nil, err
+	}
+	req := &request{h: h}
+	req.svc, req.mtype, err = server.findService(h.ServiceMethod)
+	if err != nil {
+		return req, err
+	}
+	req.argv = req.mtype.NewArgv()
+	req.replyv = req.mtype.NewReplyv()
+	argvi := req.argv.Interface()
+	//确保argvi是一个指针，ReadBody需要一个指针作为参数
+	if req.argv.Type().Kind() != reflect.Ptr {
+		argvi = req.argv.Addr().Interface()
+	}
+	if err = cc.ReadBody(argvi); err != nil {
+		log.Println("rpc server: read argv err:", err)
+		return req, err
+	}
+	return req, nil
+}
+
+// 回复请求
+func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interface{}, sending *sync.Mutex) {
+	sending.Lock()
+	defer sending.Unlock()
+	if err := cc.Write(h, body); err != nil {
+		log.Println("rpc server: write response error:", err)
+	}
+}
+
+// 处理请求
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+	// TODO, should call registered rpc methods to get the right replyv
+	// day 1, just print argv and send a hello message
+	defer wg.Done()
+	err := req.svc.Call(req.mtype, req.argv, req.replyv)
+	if err != nil {
+		req.h.Error = err.Error()
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+		return
+	}
+	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+}
+
+// Register publishes in the server the set of methods of the
+func (server *Server) Register(rcvr interface{}) error {
+	s := serviceRegister.NewService(rcvr)
+	if _, dup := server.serviceMap.LoadOrStore(s.Name, s); dup {
+		return errors.New("rpc: service already defined: " + s.Name)
+	}
+	return nil
+}
+
+// Register publishes the receiver's methods in the DefaultServer.
+func Register(rcvr interface{}) error { return DefaultServer.Register(rcvr) }
+
+func (server *Server) findService(serviceMethod string) (svc *serviceRegister.Service, mtype *serviceRegister.MethodType, err error) {
+	dot := strings.LastIndex(serviceMethod, ".")
+	if dot < 0 {
+		err = errors.New("rpc server: service/method request ill-formed: " + serviceMethod)
+		return
+	}
+	//找到实例，再从实列中找到对应的method
+	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
+	svci, ok := server.serviceMap.Load(serviceName)
+	if !ok {
+		err = errors.New("rpc server: can't find service " + serviceName)
+		return
+	}
+	svc = svci.(*serviceRegister.Service)
+	mtype = svc.Method[methodName]
+	if mtype == nil {
+		err = errors.New("rpc server: can't find method " + methodName)
+	}
+	return
+}

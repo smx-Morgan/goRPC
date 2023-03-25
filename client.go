@@ -1,10 +1,9 @@
-package Client
+package goRPC
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"goRPC/Maincodec"
 	"goRPC/Maincodec/codec"
 	"io"
 	"log"
@@ -27,10 +26,10 @@ func (call *Call) done() {
 }
 
 type Client struct {
-	cc      codec.Codec       //编码器
-	opt     *Maincodec.Option //编码器选择
-	sending sync.Mutex        //互斥锁，和服务端类似，为了保证请求的有序发送
-	header  codec.Header      //消息头
+	cc      codec.Codec  //编码器
+	opt     *Option      //编码器选择
+	sending sync.Mutex   //互斥锁，和服务端类似，为了保证请求的有序发送
+	header  codec.Header //消息头
 	mu      sync.Mutex
 	seq     uint64           //用于给发送的请求编号，每个请求拥有唯一编号
 	pending map[uint64]*Call //存储未处理完的请求，key是seq
@@ -124,7 +123,7 @@ func (client *Client) receive() {
 	client.terminateCalls(err)
 }
 
-func NewClient(conn net.Conn, opt *Maincodec.Option) (*Client, error) {
+func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 	//先完成协议交换
 	f := codec.NewCodecFuncMap[opt.CodecType]
 	if f == nil {
@@ -140,7 +139,7 @@ func NewClient(conn net.Conn, opt *Maincodec.Option) (*Client, error) {
 	}
 	return newClientCodec(f(conn), opt), nil
 }
-func newClientCodec(cc codec.Codec, opt *Maincodec.Option) *Client {
+func newClientCodec(cc codec.Codec, opt *Option) *Client {
 	client := &Client{
 		seq:     1, // seq starts with 1, 0 means invalid call
 		cc:      cc,
@@ -153,24 +152,24 @@ func newClientCodec(cc codec.Codec, opt *Maincodec.Option) *Client {
 }
 
 // 接收参数
-func parseOptions(opts ...*Maincodec.Option) (*Maincodec.Option, error) {
+func parseOptions(opts ...*Option) (*Option, error) {
 	// if opts is nil or pass nil as parameter
 	if len(opts) == 0 || opts[0] == nil {
-		return Maincodec.DefaultOption, nil
+		return DefaultOption, nil
 	}
 	if len(opts) != 1 {
 		return nil, errors.New("number of options is more than 1")
 	}
 	opt := opts[0]
-	opt.MagicNumber = Maincodec.DefaultOption.MagicNumber
+	opt.MagicNumber = DefaultOption.MagicNumber
 	if opt.CodecType == "" {
-		opt.CodecType = Maincodec.DefaultOption.CodecType
+		opt.CodecType = DefaultOption.CodecType
 	}
 	return opt, nil
 }
 
 // Dial 函数，便于用户传入服务端地址，创建 Client 实例。
-func Dial(network, address string, opts ...*Maincodec.Option) (client *Client, err error) {
+func Dial(network, address string, opts ...*Option) (client *Client, err error) {
 	opt, err := parseOptions(opts...)
 	if err != nil {
 		return nil, err
