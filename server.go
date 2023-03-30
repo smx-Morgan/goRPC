@@ -3,6 +3,7 @@ package goRPC
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"goRPC/Maincodec/codec"
 	"goRPC/serviceRegister"
 	"io"
@@ -11,18 +12,22 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 const MagicNumber = 0x3bef5c
 
 type Option struct {
-	MagicNumber int        //MagicNumber标记这是一个rcp请求
-	CodecType   codec.Type //客户端可以选择不同的编解码器对正文进行编码,这里只实现了god
+	MagicNumber    int           //MagicNumber标记这是一个rcp请求
+	CodecType      codec.Type    //客户端可以选择不同的编解码器对正文进行编码,这里只实现了god
+	ConnectTimeout time.Duration //超时连接
+	HandleTimeout  time.Duration
 }
 
 var DefaultOption = &Option{
-	MagicNumber: MagicNumber,
-	CodecType:   codec.GobType,
+	MagicNumber:    MagicNumber,
+	CodecType:      codec.GobType,
+	ConnectTimeout: time.Second * 10, //设置超时时间
 }
 
 // RPC Server
@@ -70,12 +75,12 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	if f == nil {
 		log.Printf("rpc server: invalid codec type %s", opt.CodecType)
 	}
-	server.serveCodec(f(conn))
+	server.serveCodec(f(conn), &opt)
 }
 
 var invalidRequest = struct{}{}
 
-func (server *Server) serveCodec(cc codec.Codec) {
+func (server *Server) serveCodec(cc codec.Codec, opt *Option) {
 	sending := new(sync.Mutex) //锁住线程资源
 	wg := new(sync.WaitGroup)  //等待所有请求被处理完毕
 	for {
@@ -91,7 +96,7 @@ func (server *Server) serveCodec(cc codec.Codec) {
 		}
 		wg.Add(1)
 		//并发执行处理请求
-		go server.handleRequest(cc, req, sending, wg)
+		go server.handleRequest(cc, req, sending, wg, opt.HandleTimeout)
 	}
 	//等待请求结束
 	wg.Wait()
@@ -154,17 +159,47 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 }
 
 // 处理请求
-func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup, timeout time.Duration) {
 	// TODO, should call registered rpc methods to get the right replyv
 	// day 1, just print argv and send a hello message
 	defer wg.Done()
-	err := req.svc.Call(req.mtype, req.argv, req.replyv)
-	if err != nil {
-		req.h.Error = err.Error()
-		server.sendResponse(cc, req.h, invalidRequest, sending)
+	called := make(chan struct{})
+	sent := make(chan struct{})
+	go func() {
+		err := req.svc.Call(req.mtype, req.argv, req.replyv)
+		called <- struct{}{}
+		if err != nil {
+			req.h.Error = err.Error()
+			server.sendResponse(cc, req.h, invalidRequest, sending)
+			sent <- struct{}{}
+			return
+		}
+		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+		sent <- struct{}{}
+	}()
+	if timeout == 0 {
+		<-called
+		<-sent
 		return
 	}
-	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+	select {
+	case <-time.After(timeout):
+		req.h.Error = fmt.Sprintf("rpc server: request handle timeout: expect within %s", timeout)
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+	case <-called:
+		<-sent
+	}
+	/*
+
+
+		err := req.svc.Call(req.mtype, req.argv, req.replyv)
+		if err != nil {
+			req.h.Error = err.Error()
+			server.sendResponse(cc, req.h, invalidRequest, sending)
+			return
+		}
+		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+	*/
 }
 
 // Register publishes in the server the set of methods of the
