@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -233,4 +234,40 @@ func (server *Server) findService(serviceMethod string) (svc *serviceRegister.Se
 		err = errors.New("rpc server: can't find method " + methodName)
 	}
 	return
+}
+
+// 支持http协议
+const (
+	connected        = " 200 Connected to RPC"
+	defaultRPCPath   = "/gorpc"
+	defaultDebugPath = "/debug/gorpc"
+)
+
+// ServeHTTP实现了一个http处理程序，用于回答RPC请求
+func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "CONNECT" {
+		//如果链接不是connect那就返回错误信息
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(w, "405 must CONNECT\n")
+		return
+	}
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		log.Println("rpc hijacking", req.RemoteAddr, " : ", err.Error())
+	}
+	_, _ = io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
+	//成功连接
+	server.ServeConn(conn)
+}
+
+// HandleHTTP registers an HTTP handler for RPC messages on rpcPath.
+// It is still necessary to invoke http.Serve(), typically in a go statement.
+func (server *Server) HandleHTTP() {
+	http.Handle(defaultRPCPath, server)
+}
+
+// HandleHTTP is a convenient approach for default server to register HTTP handlers
+func HandleHTTP() {
+	DefaultServer.HandleHTTP()
 }
