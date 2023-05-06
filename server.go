@@ -183,7 +183,7 @@ func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.
 		return
 	}
 	select {
-	case <-time.After(timeout):
+	case <-time.After(timeout): //先于 called 接收到消息，说明处理已经超时
 		req.h.Error = fmt.Sprintf("rpc server: request handle timeout: expect within %s", timeout)
 		server.sendResponse(cc, req.h, invalidRequest, sending)
 	case <-called:

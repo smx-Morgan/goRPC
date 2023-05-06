@@ -292,7 +292,7 @@ func DialTimeout(f newClientFunc, network, address string, opts ...*Option) (cli
 		return result.client, result.err
 	}
 	select {
-	case <-time.After(opt.ConnectTimeout):
+	case <-time.After(opt.ConnectTimeout): //先于 called 接收到消息，说明处理已经超时
 		return nil, fmt.Errorf("rpc client: connect timeout: expect within %s", opt.ConnectTimeout)
 	case result := <-ch:
 		return result.client, result.err
