@@ -14,7 +14,7 @@ type GobCodec struct {
 	enc  *gob.Encoder       //编码
 }
 
-var _ Codec = (*GobCodec)(nil)
+var _ Codec = (*GobCodec)(nil) //类型的强制转化，需要实现对应接口
 
 func NewGobCodec(conn io.ReadWriteCloser) Codec {
 	buf := bufio.NewWriter(conn)

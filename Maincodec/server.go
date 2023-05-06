@@ -77,11 +77,13 @@ func (server *Server) serveCodec(cc codec.Codec) {
 	for {
 		//读取请求
 		req, err := server.readRequest(cc)
+
 		if err != nil {
 			if req == nil {
 				break // it's not possible to recover, so close the connection
 			}
 			req.h.Error = err.Error()
+			//返回错误响应
 			server.sendResponse(cc, req.h, invalidRequest, sending)
 			continue
 		}
