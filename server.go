@@ -33,7 +33,7 @@ var DefaultOption = &Option{
 
 // RPC Server
 type Server struct {
-	serviceMap sync.Map
+	ServiceMap sync.Map
 }
 
 // return new server
@@ -206,7 +206,7 @@ func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.
 // Register publishes in the server the set of methods of the
 func (server *Server) Register(rcvr interface{}) error {
 	s := serviceRegister.NewService(rcvr)
-	if _, dup := server.serviceMap.LoadOrStore(s.Name, s); dup {
+	if _, dup := server.ServiceMap.LoadOrStore(s.Name, s); dup {
 		return errors.New("rpc: service already defined: " + s.Name)
 	}
 	return nil
@@ -223,7 +223,7 @@ func (server *Server) findService(serviceMethod string) (svc *serviceRegister.Se
 	}
 	//找到实例，再从实列中找到对应的method
 	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
-	svci, ok := server.serviceMap.Load(serviceName)
+	svci, ok := server.ServiceMap.Load(serviceName)
 	if !ok {
 		err = errors.New("rpc server: can't find service " + serviceName)
 		return
@@ -238,7 +238,7 @@ func (server *Server) findService(serviceMethod string) (svc *serviceRegister.Se
 
 // 支持http协议
 const (
-	connected        = " 200 Connected to RPC"
+	connected        = "200 Connected to RPC"
 	defaultRPCPath   = "/gorpc"
 	defaultDebugPath = "/debug/gorpc"
 )
@@ -246,7 +246,6 @@ const (
 // ServeHTTP实现了一个http处理程序，用于回答RPC请求
 func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if req.Method != "CONNECT" {
-		//如果链接不是connect那就返回错误信息
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		_, _ = io.WriteString(w, "405 must CONNECT\n")
@@ -254,10 +253,10 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	conn, _, err := w.(http.Hijacker).Hijack()
 	if err != nil {
-		log.Println("rpc hijacking", req.RemoteAddr, " : ", err.Error())
+		log.Print("rpc hijacking ", req.RemoteAddr, ": ", err.Error())
+		return
 	}
 	_, _ = io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
-	//成功连接
 	server.ServeConn(conn)
 }
 
@@ -265,6 +264,8 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // It is still necessary to invoke http.Serve(), typically in a go statement.
 func (server *Server) HandleHTTP() {
 	http.Handle(defaultRPCPath, server)
+	http.Handle(defaultDebugPath, DebugHTTP{server})
+	log.Println("rpc server debug path:", defaultDebugPath)
 }
 
 // HandleHTTP is a convenient approach for default server to register HTTP handlers

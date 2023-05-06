@@ -303,9 +303,11 @@ func DialTimeout(f newClientFunc, network, address string, opts ...*Option) (cli
 }
 func NewHTTPClient(conn net.Conn, opt *Option) (*Client, error) {
 	_, _ = io.WriteString(conn, fmt.Sprintf("CONNECT %s HTTP/1.0\n\n", defaultRPCPath))
-	// 需要成功返回
-	//在切换到RPC协议之前
+
+	// Require successful HTTP response
+	// before switching to RPC protocol.
 	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
+	//print(resp.Status)
 	if err == nil && resp.Status == connected {
 		return NewClient(conn, opt)
 	}
